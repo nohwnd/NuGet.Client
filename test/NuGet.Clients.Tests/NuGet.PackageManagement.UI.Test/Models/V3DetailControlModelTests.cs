@@ -222,6 +222,54 @@ namespace NuGet.PackageManagement.UI.Test.Models
             Assert.Equal(expectedVersions, actualVersions);
         }
 
+        [Fact]
+        public async Task SetCurrentPackageAsync_WhenFloatingVersions()
+        {
+            // Arrange
+            NuGetVersion installedVersion = NuGetVersion.Parse("1.0.0");
+
+            var testVersions = new List<VersionInfoContextInfo>() {
+                new VersionInfoContextInfo(new NuGetVersion("3.0.0")),
+                new VersionInfoContextInfo(new NuGetVersion("2.0.0")),
+                new VersionInfoContextInfo(new NuGetVersion("1.0.0-beta")),
+                new VersionInfoContextInfo(new NuGetVersion("0.0.1")),
+            };
+
+            var searchService = new Mock<IReconnectingNuGetSearchService>();
+            searchService.Setup(ss => ss.GetPackageVersionsAsync(It.IsAny<PackageIdentity>(), It.IsAny<IReadOnlyCollection<PackageSourceContextInfo>>(), It.IsAny<bool>(), It.IsAny<bool>(), It.IsAny<IEnumerable<IProjectContextInfo>>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(testVersions);
+
+            var vm = new PackageItemViewModel(searchService.Object)
+            {
+                Id = "package",
+                InstalledVersion = installedVersion,
+                Version = installedVersion,
+            };
+
+            // Act
+
+            await _testInstance.SetCurrentPackageAsync(
+                vm,
+                ItemFilter.All,
+                () => vm);
+
+            // Assert
+            var expectedAdditionalInfo = string.Empty;
+
+            // Remove any added `null` separators, and any Additional Info entries (eg, "Latest Prerelease", "Latest Stable").
+            List<DisplayVersion> actualVersions = _testInstance.Versions
+                .Where(v => v != null && v.AdditionalInfo == expectedAdditionalInfo).ToList();
+
+            var expectedVersions = new List<DisplayVersion>() {
+                new DisplayVersion(version: new NuGetVersion("3.0.0"), additionalInfo: expectedAdditionalInfo),
+                new DisplayVersion(version: new NuGetVersion("2.0.0"), additionalInfo: expectedAdditionalInfo),
+                new DisplayVersion(version: new NuGetVersion("1.0.0-beta"), additionalInfo: expectedAdditionalInfo),
+                new DisplayVersion(version: new NuGetVersion("0.0.1"), additionalInfo: expectedAdditionalInfo),
+            };
+
+            Assert.Equal(expectedVersions, actualVersions);
+        }
+
         [Theory]
         [InlineData(ItemFilter.All, "3.0.0")]
         [InlineData(ItemFilter.Installed, "1.0.0")]
@@ -320,12 +368,48 @@ namespace NuGet.PackageManagement.UI.Test.Models
             Assert.True(wasVersionsListCleared, "Versions list was not cleared.");
         }
 
+
+        private ItemsChangeObservableCollection<DisplayVersion> VersionsList_WhenInstalledVersion_IsNotLatest(string allowedVersions, string installedVersion)
+        {
+            return new ItemsChangeObservableCollection<DisplayVersion>() {
+                new DisplayVersion(VersionRange.Parse(allowedVersions), new NuGetVersion(installedVersion), null),
+                new DisplayVersion(VersionRange.Parse("3.0.0"), new NuGetVersion("3.0.0"), "Latest stable"),
+                null,
+                new DisplayVersion(VersionRange.Parse("3.0.0"), new NuGetVersion("3.0.0"), null),
+                new DisplayVersion(VersionRange.Parse("2.0.0"), new NuGetVersion("2.0.0"), null),
+                new DisplayVersion(VersionRange.Parse("1.1.0"), new NuGetVersion("1.1.0"), null),
+                new DisplayVersion(VersionRange.Parse("1.0.0"), new NuGetVersion("1.0.0"), null),
+                new DisplayVersion(VersionRange.Parse("1.0.0-beta"), new NuGetVersion("1.0.0-beta"), null),
+                new DisplayVersion(VersionRange.Parse("0.0.1"), new NuGetVersion("0.0.1"), null),
+            };
+        }
+
+        private ItemsChangeObservableCollection<DisplayVersion> VersionsList_WhenInstalledVersion_IsLatest(string allowedVersions, string installedVersion)
+        {
+            return new ItemsChangeObservableCollection<DisplayVersion>() {
+                new DisplayVersion(VersionRange.Parse(allowedVersions), new NuGetVersion(installedVersion), null),
+                null,
+                new DisplayVersion(VersionRange.Parse("3.0.0"), new NuGetVersion("3.0.0"), null),
+                new DisplayVersion(VersionRange.Parse("2.0.0"), new NuGetVersion("2.0.0"), null),
+                new DisplayVersion(VersionRange.Parse("1.1.0"), new NuGetVersion("1.1.0"), null),
+                new DisplayVersion(VersionRange.Parse("1.0.0"), new NuGetVersion("1.0.0"), null),
+                new DisplayVersion(VersionRange.Parse("1.0.0-beta"), new NuGetVersion("1.0.0-beta"), null),
+                new DisplayVersion(VersionRange.Parse("0.0.1"), new NuGetVersion("0.0.1"), null),
+            };
+        }
+
         [Theory]
-        [InlineData("*", "2.10.0")]
-        [InlineData("1.*", "2.10.0")]
-        [InlineData("(0.1,3.4)", "2.10.0")]
-        [InlineData("2.10.0", "2.10.0")]
-        public async void WhenPackageStyleIsPackageReference_And_CustomVersion_InstalledTab_IsSelectedVersionCorrect(string allowedVersions, string installedVersion)
+        [InlineData("3.*", "3.0.0", false)]
+        [InlineData("[2.9,)", "3.0.0", false)]
+        [InlineData("*", "3.0.0", false)]
+        [InlineData("2.*", "2.0.0", false)]
+        [InlineData("(1.*,)", "1.1.0", false)]
+        [InlineData("(1.1*,)", "2.0.0", false)]
+        [InlineData("[2.*,)", "2.0.0", false)]
+        [InlineData("3.0", "3.0.0", true)]
+        [InlineData("3.0.0", "3.0.0", true)]
+        [InlineData("3", "3.0.0", true)]
+        public async void WhenPackageStyleIsPackageReference_And_CustomVersion_InstalledTab_IsSelectedVersionCorrect(string allowedVersions, string installedVersion, bool isLatest)
         {
             // Arange project
             var mockServiceBroker = new Mock<IServiceBroker>();
@@ -356,8 +440,8 @@ namespace NuGet.PackageManagement.UI.Test.Models
                 .ReturnsAsync(projectManagerService.Object);
 #pragma warning restore ISB001 // Dispose of proxies
 
+            // Setup project
             var project = new Mock<IProjectContextInfo>();
-
             project.SetupGet(p => p.ProjectKind).Returns(NuGetProjectKind.PackageReference);
             project.SetupGet(p => p.ProjectStyle).Returns(ProjectModel.ProjectStyle.PackageReference);
             project.SetupGet(p => p.ProjectId).Returns("ProjectId");
@@ -369,8 +453,12 @@ namespace NuGet.PackageManagement.UI.Test.Models
 
             // Arrange
             var testVersions = new List<VersionInfoContextInfo>() {
-                new VersionInfoContextInfo(new NuGetVersion("2.10.1-dev-01248")),
-                new VersionInfoContextInfo(new NuGetVersion("2.10.0")),
+                new VersionInfoContextInfo(new NuGetVersion("3.0.0")),
+                new VersionInfoContextInfo(new NuGetVersion("2.0.0")),
+                new VersionInfoContextInfo(new NuGetVersion("1.0.0-beta")),
+                new VersionInfoContextInfo(new NuGetVersion("1.1.0")),
+                new VersionInfoContextInfo(new NuGetVersion("1.0.0")),
+                new VersionInfoContextInfo(new NuGetVersion("0.0.1")),
             };
 
             var searchService = new Mock<IReconnectingNuGetSearchService>();
@@ -381,10 +469,10 @@ namespace NuGet.PackageManagement.UI.Test.Models
             var vm = new PackageItemViewModel(searchService.Object)
             {
                 Id = "Contoso.A",
-                Sources = new List<PackageSourceContextInfo> { new PackageSourceContextInfo("Contoso.A.test") },
-                InstalledVersion = NuGetVersion.Parse(installedVersion),
+                Sources = new List<PackageSourceContextInfo> { new PackageSourceContextInfo("test_source") },
+                InstalledVersion = packageIdentity.Version,
                 AllowedVersions = VersionRange.Parse(allowedVersions),
-                Version = NuGetVersion.Parse(installedVersion),
+                Version = packageIdentity.Version,
             };
 
             await model.SetCurrentPackageAsync(
@@ -397,8 +485,11 @@ namespace NuGet.PackageManagement.UI.Test.Models
             NuGetVersion bestVersion = installedVersionRange.FindBestMatch(testVersions.Select(t => t.Version));
             var displayVersion = new DisplayVersion(installedVersionRange, bestVersion, additionalInfo: null);
 
+            var assertVers = isLatest ? VersionsList_WhenInstalledVersion_IsLatest(allowedVersions, installedVersion) : VersionsList_WhenInstalledVersion_IsNotLatest(allowedVersions, installedVersion);
+
             Assert.Equal(model.SelectedVersion.ToString(), allowedVersions);
             Assert.Equal(model.Versions.FirstOrDefault(), displayVersion);
+            Assert.Equal(model.Versions, assertVers);
         }
 
         [Theory]
